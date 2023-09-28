@@ -5,29 +5,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/hailocab/go-geoindex"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
 )
-
-const (
-	maxSearchRadius  = 10
-	maxSearchResults = 1000000000
-)
-
-var (
-	rateTable map[stay]*RatePlan
-	geoIndex  *geoindex.ClusteringIndex
-	profiles  map[string]*Hotel
-)
-
-func loadAllData() {
-	geoIndex = newGeoIndex()
-	rateTable = loadRateTable()
-	profiles = loadProfiles()
-}
 
 func geoJSONResponse(hotels []*Hotel) map[string]interface{} {
 	var fs []interface{}
@@ -54,6 +36,30 @@ func geoJSONResponse(hotels []*Hotel) map[string]interface{} {
 		"type":     "FeatureCollection",
 		"features": fs,
 	}
+}
+
+func getParams(r *http.Request) (string, string, float64, float64, error) {
+	inDate, outDate := r.URL.Query().Get("inDate"), r.URL.Query().Get("outDate")
+	if inDate == "" || outDate == "" {
+		return "_", "_", 0, 0, errors.New("inDate/outDate params not specified")
+	}
+
+	latParam, lonParam := r.URL.Query().Get("lat"), r.URL.Query().Get("lon")
+	if latParam == "" || lonParam == "" {
+		return "_", "_", 0, 0, errors.New("lon/lat params not specified")
+	}
+
+	lat, err := strconv.ParseFloat(strings.TrimSpace(latParam), 64)
+	if err != nil {
+		return "_", "_", 0, 0, errors.New("invalid latitude")
+	}
+
+	lon, err := strconv.ParseFloat(strings.TrimSpace(lonParam), 64)
+	if err != nil {
+		return "_", "_", 0, 0, errors.New("invalid longitude")
+	}
+
+	return inDate, outDate, lon, lat, nil
 }
 
 func main() {
@@ -84,72 +90,4 @@ func hotelsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-}
-
-func getParams(r *http.Request) (string, string, float64, float64, error) {
-	inDate, outDate := r.URL.Query().Get("inDate"), r.URL.Query().Get("outDate")
-	if inDate == "" || outDate == "" {
-		return "_", "_", 0, 0, errors.New("inDate/outDate params not specified")
-	}
-
-	latParam, lonParam := r.URL.Query().Get("lat"), r.URL.Query().Get("lon")
-	if latParam == "" || lonParam == "" {
-		return "_", "_", 0, 0, errors.New("lon/lat params not specified")
-	}
-
-	lat, err := strconv.ParseFloat(strings.TrimSpace(latParam), 64)
-	if err != nil {
-		return "_", "_", 0, 0, errors.New("invalid latitude")
-	}
-
-	lon, err := strconv.ParseFloat(strings.TrimSpace(lonParam), 64)
-	if err != nil {
-		return "_", "_", 0, 0, errors.New("invalid longitude")
-	}
-
-	return inDate, outDate, lon, lat, nil
-}
-
-func getNearbyPoints(lat, lon float64) []geoindex.Point {
-	center := &geoindex.GeoPoint{
-		Pid:  "",
-		Plat: lat,
-		Plon: lon,
-	}
-
-	return geoIndex.KNearest(
-		center,
-		maxSearchResults,
-		geoindex.Km(maxSearchRadius),
-		func(p geoindex.Point) bool {
-			return true
-		},
-	)
-}
-
-func getRatePlans(points []geoindex.Point, inDate string, outDate string) []*RatePlan {
-	var ratePlans []*RatePlan
-
-	for _, p := range points {
-		s := stay{
-			HotelID: p.Id(),
-			InDate:  inDate,
-			OutDate: outDate,
-		}
-		if rate, ok := rateTable[s]; ok {
-			ratePlans = append(ratePlans, rate)
-		}
-	}
-
-	return ratePlans
-}
-
-func getHotels(ratePlans []*RatePlan) []*Hotel {
-	var hotels []*Hotel
-	for _, rate := range ratePlans {
-		if hotel, ok := profiles[rate.HotelId]; ok {
-			hotels = append(hotels, hotel)
-		}
-	}
-	return hotels
 }

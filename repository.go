@@ -3,9 +3,70 @@ package main
 import (
 	"encoding/json"
 	"github.com/hailocab/go-geoindex"
-	"github.com/harlow/go-micro-services/geo/data"
+	"github.com/harlow/go-micro-services/app/data"
 	"log"
 )
+
+const (
+	maxSearchRadius  = 10
+	maxSearchResults = 1000000000
+)
+
+var (
+	rateTable map[stay]*RatePlan
+	geoIndex  *geoindex.ClusteringIndex
+	profiles  map[string]*Hotel
+)
+
+func loadAllData() {
+	geoIndex = newGeoIndex()
+	rateTable = loadRateTable()
+	profiles = loadProfiles()
+}
+
+func getNearbyPoints(lat, lon float64) []geoindex.Point {
+	center := &geoindex.GeoPoint{
+		Pid:  "",
+		Plat: lat,
+		Plon: lon,
+	}
+
+	return geoIndex.KNearest(
+		center,
+		maxSearchResults,
+		geoindex.Km(maxSearchRadius),
+		func(p geoindex.Point) bool {
+			return true
+		},
+	)
+}
+
+func getRatePlans(points []geoindex.Point, inDate string, outDate string) []*RatePlan {
+	var ratePlans []*RatePlan
+
+	for _, p := range points {
+		s := stay{
+			HotelID: p.Id(),
+			InDate:  inDate,
+			OutDate: outDate,
+		}
+		if rate, ok := rateTable[s]; ok {
+			ratePlans = append(ratePlans, rate)
+		}
+	}
+
+	return ratePlans
+}
+
+func getHotels(ratePlans []*RatePlan) []*Hotel {
+	var hotels []*Hotel
+	for _, rate := range ratePlans {
+		if hotel, ok := profiles[rate.HotelId]; ok {
+			hotels = append(hotels, hotel)
+		}
+	}
+	return hotels
+}
 
 func newGeoIndex() *geoindex.ClusteringIndex {
 	var (
