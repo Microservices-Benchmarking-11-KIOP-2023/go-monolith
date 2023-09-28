@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/hailocab/go-geoindex"
@@ -26,23 +27,6 @@ func loadAllData() {
 	geoIndex = newGeoIndex()
 	rateTable = loadRateTable()
 	profiles = loadProfiles()
-}
-
-func getNearbyPoints(lat, lon float64) []geoindex.Point {
-	center := &geoindex.GeoPoint{
-		Pid:  "",
-		Plat: lat,
-		Plon: lon,
-	}
-
-	return geoIndex.KNearest(
-		center,
-		maxSearchResults,
-		geoindex.Km(maxSearchRadius),
-		func(p geoindex.Point) bool {
-			return true
-		},
-	)
 }
 
 func geoJSONResponse(hotels []*Hotel) map[string]interface{} {
@@ -85,32 +69,65 @@ func main() {
 func hotelsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	inDate, outDate := r.URL.Query().Get("inDate"), r.URL.Query().Get("outDate")
-	if inDate == "" || outDate == "" {
-		http.Error(w, "Please specify inDate/outDate params", http.StatusBadRequest)
-		return
-	}
-
-	latParam, lonParam := r.URL.Query().Get("lat"), r.URL.Query().Get("lon")
-	if latParam == "" || lonParam == "" {
-		http.Error(w, "Please specify lat/lon params", http.StatusBadRequest)
-		return
-	}
-
-	lat, err := strconv.ParseFloat(strings.TrimSpace(latParam), 64)
+	inDate, outDate, lon, lat, err := getParams(r)
 	if err != nil {
-		http.Error(w, "Invalid latitude", http.StatusBadRequest)
-		return
-	}
-
-	lon, err := strconv.ParseFloat(strings.TrimSpace(lonParam), 64)
-	if err != nil {
-		http.Error(w, "Invalid longitude", http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	points := getNearbyPoints(lat, lon)
+	ratePlans := getRatePlans(points, inDate, outDate)
+	hotels := getHotels(ratePlans)
 
+	err = json.NewEncoder(w).Encode(geoJSONResponse(hotels))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
+func getParams(r *http.Request) (string, string, float64, float64, error) {
+	inDate, outDate := r.URL.Query().Get("inDate"), r.URL.Query().Get("outDate")
+	if inDate == "" || outDate == "" {
+		return "_", "_", 0, 0, errors.New("inDate/outDate params not specified")
+	}
+
+	latParam, lonParam := r.URL.Query().Get("lat"), r.URL.Query().Get("lon")
+	if latParam == "" || lonParam == "" {
+		return "_", "_", 0, 0, errors.New("lon/lat params not specified")
+	}
+
+	lat, err := strconv.ParseFloat(strings.TrimSpace(latParam), 64)
+	if err != nil {
+		return "_", "_", 0, 0, errors.New("invalid latitude")
+	}
+
+	lon, err := strconv.ParseFloat(strings.TrimSpace(lonParam), 64)
+	if err != nil {
+		return "_", "_", 0, 0, errors.New("invalid longitude")
+	}
+
+	return inDate, outDate, lon, lat, nil
+}
+
+func getNearbyPoints(lat, lon float64) []geoindex.Point {
+	center := &geoindex.GeoPoint{
+		Pid:  "",
+		Plat: lat,
+		Plon: lon,
+	}
+
+	return geoIndex.KNearest(
+		center,
+		maxSearchResults,
+		geoindex.Km(maxSearchRadius),
+		func(p geoindex.Point) bool {
+			return true
+		},
+	)
+}
+
+func getRatePlans(points []geoindex.Point, inDate string, outDate string) []*RatePlan {
 	var ratePlans []*RatePlan
 
 	for _, p := range points {
@@ -124,16 +141,15 @@ func hotelsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	return ratePlans
+}
+
+func getHotels(ratePlans []*RatePlan) []*Hotel {
 	var hotels []*Hotel
 	for _, rate := range ratePlans {
 		if hotel, ok := profiles[rate.HotelId]; ok {
 			hotels = append(hotels, hotel)
 		}
 	}
-
-	err = json.NewEncoder(w).Encode(geoJSONResponse(hotels))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	return hotels
 }
