@@ -1,0 +1,8 @@
+services:
+  gateway:
+    image: ghcr.io/microservices-benchmarking-11-kiop-2023/go-mono:latest
+    build:
+      dockerfile: Dockerfile
+      context: .
+    ports:
+      - 5000:8080
