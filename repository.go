@@ -2,51 +2,71 @@ package main
 
 import (
 	"encoding/json"
-	"github.com/hailocab/go-geoindex"
 	"github.com/harlow/go-micro-services/app/data"
 	"log"
+	"math"
 )
 
 const (
-	maxSearchRadius  = 10
-	maxSearchResults = 1000000000
+	maxSearchRadius = 10
+	earthRadiusKm   = 6371
 )
 
 var (
 	rateTable map[stay]*RatePlan
-	geoIndex  *geoindex.ClusteringIndex
+	points    []*point
 	profiles  map[string]*Hotel
 )
 
 func loadAllData() {
-	geoIndex = newGeoIndex()
+	points = loadPoints("data/geo.json")
 	rateTable = loadRateTable()
 	profiles = loadProfiles()
 }
 
-func getNearbyPoints(lat, lon float64) []geoindex.Point {
-	center := &geoindex.GeoPoint{
-		Pid:  "",
-		Plat: lat,
-		Plon: lon,
-	}
+func haversineDistance(lat1, lon1, lat2, lon2 float64) float64 {
+	lat1Rad, lon1Rad := lat1*math.Pi/180, lon1*math.Pi/180
+	lat2Rad, lon2Rad := lat2*math.Pi/180, lon2*math.Pi/180
 
-	return geoIndex.KNearest(
-		center,
-		maxSearchResults,
-		geoindex.Km(maxSearchRadius),
-		func(p geoindex.Point) bool {
-			return true
-		},
-	)
+	dLat := lat2Rad - lat1Rad
+	dLon := lon2Rad - lon1Rad
+	a := math.Sin(dLat/2)*math.Sin(dLat/2) + math.Cos(lat1Rad)*math.Cos(lat2Rad)*math.Sin(dLon/2)*math.Sin(dLon/2)
+	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+
+	return earthRadiusKm * c
 }
 
-func getRatePlans(points []geoindex.Point, inDate string, outDate string) []*RatePlan {
+func getNearbyPoints(lat, lon float64) []string {
+	var nearbyHotels []string
+	for _, point := range points {
+		distance := haversineDistance(lat, lon, point.Plat, point.Plon)
+		if distance <= maxSearchRadius {
+			nearbyHotels = append(nearbyHotels, point.Pid)
+		}
+	}
+
+	return nearbyHotels
+}
+
+func loadPoints(path string) []*point {
+	var (
+		file   = data.MustAsset(path)
+		points []*point
+	)
+
+	if err := json.Unmarshal(file, &points); err != nil {
+		log.Fatalf("Failed to load hotels: %v", err)
+	}
+
+	return points
+}
+
+func getRatePlans(hotelIds []string, inDate string, outDate string) []*RatePlan {
 	var ratePlans []*RatePlan
 
-	for _, p := range points {
+	for _, id := range hotelIds {
 		s := stay{
-			HotelID: p.Id(),
+			HotelID: id,
 			InDate:  inDate,
 			OutDate: outDate,
 		}
@@ -66,24 +86,6 @@ func getHotels(ratePlans []*RatePlan) []*Hotel {
 		}
 	}
 	return hotels
-}
-
-func newGeoIndex() *geoindex.ClusteringIndex {
-	var (
-		file   = data.MustAsset("data/geo.json")
-		points []*point
-	)
-
-	if err := json.Unmarshal(file, &points); err != nil {
-		log.Fatalf("Failed to load hotels: %v", err)
-	}
-
-	index := geoindex.NewClusteringIndex()
-	for _, point := range points {
-		index.Add(point)
-	}
-
-	return index
 }
 
 func loadProfiles() map[string]*Hotel {
